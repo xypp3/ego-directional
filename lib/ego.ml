@@ -6,3 +6,4 @@ module Generic = struct
   include Language
   include Generic
 end
+module Implication = Implication

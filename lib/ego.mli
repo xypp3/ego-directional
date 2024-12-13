@@ -11,6 +11,9 @@
     2. {!Ego.Generic} - a higher order interface to equality saturation,
     parameterised over custom-user defined analyses.
 
+    3. {!Ego.Implication} - based on the Ego.Basic module with additional
+    support for implication formulas
+
     You may want to check out the {{:../index.html} quick start guide}.
 *)
 
@@ -804,5 +807,160 @@ module Generic : sig
       end
 
     end
+
+end
+
+module Implication: sig
+
+  (** This module implements a {i fairly efficient}
+      "syntactic-rewrite-only" EGraph-based equality saturation engine
+      that operates over Sexps.
+
+      The main interface to EGraph is under the module {!EGraph}.
+
+      Note: This module is not safe for serialization as it uses
+      {!Symbol.t} internally to represent strings, and so will be
+      dependent on the execution context. If you wish to persist
+      EGraphs across executions, check out the EGraphs defined in
+      {!Ego.Generic} *)
+
+  module Symbol : sig  
+    (** Implements an efficient encoding of strings
+
+        Note: Datatypes using this module are not safe for
+        serialization as tag associated with each string dependent on
+        the execution context.
+
+        If you wish to persist EGraphs across executions, check out the
+        EGraphs defined in {!Ego.Generic} *)
+
+    type t = private int
+    (** Abstract type providing an efficient encoding of some string value. *)
+
+    val intern : string -> t
+    (** [intern s] returns a symbol representing the string [s].  *)
+
+    val to_string : t -> string
+    (** [to_string t] returns the string associated with symbol [t]. *)
+  end 
+
+  module Query : sig
+    (** This module encodes patterns (for both matching and
+        transformation) over Sexprs and is part of {!Ego.Implication}'s API
+        for expressing syntactic rewrites. *)
+
+    type t
+    (** Encodes a pattern over S-expressions. *)
+
+    val pp: Format.formatter -> t -> unit
+    (** [pp fmt s] pretty prints the query [s]. *)
+
+    val show: t -> string
+    (** [show s] converts the query [s] to a string *)
+
+    val of_sexp : Sexplib0.Sexp.t -> t
+    (** [of_sexp s] builds a pattern from a s-expression
+
+        Note: Any atom prefixed with "?" will be treated as a pattern
+        variable.
+
+        For example, the following pattern will match any multiplication expressions:
+        {[
+          List [Atom "*"; Atom "?a"; Atom "?b"]
+        ]}
+    *)
+
+    val to_sexp : t -> Sexplib0.Sexp.t
+    (** [to_sexp s] converts a pattern back into an s-expression. This is idempotent with {!of_sexp}.  *)
+
+  end
+
+  module Rule : sig
+    (** This module encodes syntactic rewrite rules over Sexprs and is part of {!Ego.Implication}'s API
+        for expressing syntactic rewrites. *)
+
+    type t
+    (** Encodes a rewrite rule over S-expressions.  *)
+
+    val pp: Format.formatter -> t -> unit
+    (** [pp fmt r] pretty prints the rewrite rule [r]. *) 
+
+    val show: t -> string
+    (** [show r] converts the rewrite rule [r] to a string *)
+
+
+    val make: from:Query.t -> into:Query.t -> t option
+    (** [make ~from ~into] builds a syntactic rewrite rule from a
+        matching pattern [from] and a result pattern [into].
+
+        Iff [into] contains variables that are not bound in [from],
+        then the rule is invalid, and the function will return [None]. *)
+
+  end
+
+  module EGraph : sig
+    (** This module defines the main interface to the EGraph provided
+        by {!Ego.Implication}.  *)
+
+    type t
+    (** Represents a syntactic-rewrite-only EGraph that operates over
+        Sexps. *)
+
+    val pp : ?pp_id:(Format.formatter -> Id.t -> unit) -> Format.formatter -> t -> unit
+    (** [pp ?pp_id fmt graph] prints an internal representation of the
+        [graph].
+
+        {b Note}: This is primarily intended for debugging, and the
+        output format is not guaranteed to remain consistent over
+        versions. *)
+
+    val pp_dot : Format.formatter -> t -> unit
+    (** [pp_dot fmt graph] pretty prints [graph] in a Graphviz format. *)
+
+    val init : unit -> t
+    (** [init ()] creates a new EGraph.  *)
+
+    val add_sexp : t -> Sexplib0.Sexp.t -> Id.t
+    (** [add_sexp graph sexp] adds [sexp] to [graph] and returns the
+        equivalence class associated with term. *)
+
+    val to_dot : t -> Odot.graph
+    (** [to_dot graph] converts [graph] into a Graphviz representation. *)
+
+    val merge : t -> Id.t -> Id.t -> unit
+    (** [merge graph id1 id2] merges the equivalence classes
+        associated with [id1] and [id2].
+
+        {b Note}: If you call {!merge} manually, you must call
+        {!rebuild} before running any queries or extraction. *)
+
+    val rebuild : t -> unit
+    (** [rebuild graph] restores the internal invariants of the EGraph
+        [graph].
+
+        {b Note}: If you call {!merge} manually, you must call
+        {!rebuild} before running any queries or extraction.  *)
+
+    val extract: ((Id.t -> float) -> (Symbol.t * Id.t list) -> float) -> t -> Id.t -> Sexplib0.Sexp.t
+    (** [extract cost_fn graph] computes an extraction function [Id.t
+        -> Sexplib0.Sexp.t] to extract terms (specified by [Id.t]) from
+        the EGraph.
+
+        [cost_fn f (sym,children)] should assign costs to the node
+        with tag [sym] and children [children] - it can use [f] to
+        determine the cost of a child. *)
+
+    val apply_rules : t -> Rule.t list -> unit
+    (** [apply_rules graph rules] runs each of the rewrites in [rules]
+        exactly once over the egraph [graph] and then returns. *)
+
+    val run_until_saturation: ?fuel:int -> t -> Rule.t list -> bool
+    (** [run_until_saturation ?fuel graph rules] repeatedly each one
+        of the rewrites in [rules] until no further changes occur ({i
+        i.e equality saturation }), or until it runs out of [fuel].
+
+        It returns a boolean indicating whether it reached equality
+        saturation or had to terminate early.  *)
+  end
 
 end
